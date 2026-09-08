@@ -19,6 +19,10 @@ EXPECTED_COLUMNS = {
     "lsf_queue": [
         "ts", "host", "queue", "njobs", "pend", "run", "susp", "_load_seq",
     ],
+    # ※CR-010 sar は縦持ち。論理 PK は 5 列である
+    "sar": [
+        "ts", "host", "activity", "device", "metric", "value", "_load_seq",
+    ],
     "load_error": ["file_path", "reason", "line_count"],
 }
 

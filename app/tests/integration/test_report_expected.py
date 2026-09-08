@@ -16,7 +16,7 @@ from s_anomaly import (
     bootstrap, causes, co_anomaly, config, detectors, discovery, events,
     loaders, metrics, progress as progress_mod, reporter, schema,
 )
-from s_anomaly.loaders import bqueues, dbconn, jstat
+from s_anomaly.loaders import bqueues, dbconn, jstat, sar
 from tests.integration import _setup_baseline, report_parser
 
 def _join_host_reports(out_dir):
@@ -53,6 +53,7 @@ class TestReportExpected(unittest.TestCase):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         logs = os.path.join(cls.paths["normal"], "logs")
         files = discovery.discover(logs, cls.progress)

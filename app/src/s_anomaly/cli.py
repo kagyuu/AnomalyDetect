@@ -24,7 +24,7 @@ from .errors import (
     AllParseFailedError, AppError, ArgumentError, NoInputFileError,
     StorageError, UNEXPECTED_EXIT_CODE,
 )
-from .loaders import bqueues, dbconn, jstat
+from .loaders import bqueues, dbconn, jstat, sar   # ※CR-010 sar
 
 USAGE = """usage: s_anomaly.py <dir>
 
@@ -175,6 +175,7 @@ FILE_PATTERNS = [
     "DBConnection_{yyyymmdd}.csv",
     "{コンテナ名}_gc_{ホスト名}_{yyyymmdd}.txt",
     "bqueues_{ホスト名}_{yyyymmdd}.txt",
+    "sa-{ホスト名}-{yyyymmdd}.csv",          # ※CR-010 sar (sysstat)
 ]
 
 
@@ -193,6 +194,7 @@ def ingest(con, target, progress, cfg=None):
         discovery.KIND_DBCONN: dbconn.load,
         discovery.KIND_JVMGC: jstat.load,
         discovery.KIND_LSF: bqueues.load,
+        discovery.KIND_SAR: sar.load,          # ※CR-010
     }
     total = len(logfiles)
     ok_rows = 0
@@ -232,7 +234,7 @@ def ingest(con, target, progress, cfg=None):
         )
 
     remaining = 0
-    for table in ("db_connection", "jvm_gc", "lsf_queue"):
+    for table in ("db_connection", "jvm_gc", "lsf_queue", "sar"):   # ※CR-010
         remaining += con.execute("SELECT count(*) FROM {0}".format(table)).fetchone()[0]
 
     if remaining == 0:

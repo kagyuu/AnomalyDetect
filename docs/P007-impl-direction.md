@@ -22,6 +22,7 @@
 - [x] U009 [detectors-c — 観点3(上限への張り付き)](./P007-impl-direction/U009-detectors-c.md) — ALG-C1 と系列単位のキャッシュ、S6 の並列実行(※CR-005 / CR-006 / CR-007)
 - [x] U007 [events — 統合・脅威度・原因候補・相関](./P007-impl-direction/U007-events.md) — 検知点をイベントに仕立てる
 - [x] U008 [report — レポート生成と全体結線](./P007-impl-direction/U008-report.md) — report.md の生成と終了コードの完成
+- [x] U010 [sar — sar(sysstat)の取り込み](./P007-impl-direction/U010-sar.md) — 入力種別を 3 → 4 に増やす(※CR-010)。**※CR-011 で活動種別を 8 → 10 に増やした(NFS / NFSD)**
 
 ## 3. 全スプリント共通の指示
 

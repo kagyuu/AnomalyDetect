@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | 1 | 入力 JST / レポート UTC | 完走し、時刻が UTC へ寄せられ、`(UTC)` が併記される |
 | 2 | 入力 UTC / レポート JST | 完走し、時刻が JST へ寄せられ、`(Asia/Tokyo)` が併記される |
-| 3 | **sar が無い場合** | sar は当面 分析対象にならないため、**無くても完走する**こと |
+| 3 | **sar を含む構成** ※CR-010 で意味が変わった | sar も `[timezone]` の対象になった。**sar が無くても完走し、`[timezone] sar` が既知のキーとして受理される**こと |
 
 **深追いはしない。** 変換規則そのものの正しさは単体テスト
 (`tests/unit/test_timezone.py`)が確かめている。
@@ -72,7 +72,9 @@ class TestA012TimezonePassthrough(H.BaselineCase):
         super(TestA012TimezonePassthrough, cls).setUpClass()
         cls._tmp = tempfile.TemporaryDirectory()
         tmp = cls._tmp.name
-        kinds = ["db_connection", "jvm_gc", "lsf_queue"]
+        # ※CR-010 sar を含めた 4 種別をまとめて変換する。
+        # 一部だけ変換すると入力の時刻軸がずれ、疎通確認の意味が薄れる。
+        kinds = ["db_connection", "jvm_gc", "lsf_queue", "sar"]
 
         # 基準: 入力 UTC / レポート UTC (既定の構成)
         cls.base_proc, cls.base_work = run_with(
@@ -150,10 +152,13 @@ class TestA012TimezonePassthrough(H.BaselineCase):
 
 
 class TestA012WithoutSar(H.BaselineCase):
-    """3 — sar が無い場合の疎通確認。
+    """3 — sar を含む/含まない構成の疎通確認。
 
-    **sar は当面 分析対象にならない**(2026-09-06 の依頼者の指示)。
-    したがって「sar が無くても支障が無いこと」を確かめる。
+    ★CR-010 で前提が変わった★ 以前は「sar は当面 分析対象にならない」
+    (2026-09-06 の指示)ため「置いても無視されること」を確かめていた。
+    **CR-010 で sar は正式な入力種別になった**ため、確かめることを
+    「**sar が無くても完走すること**」と「**`[timezone] sar` が既知のキーとして
+    受理されること**」に改めた。
     """
 
     @classmethod
@@ -166,17 +171,16 @@ class TestA012WithoutSar(H.BaselineCase):
         cls.plain_proc, cls.plain_work = run_with(
             tmp, "nosar", None, cls.normal_logs)
 
-        # 3b) sa-*.csv が置いてあっても無視されること
-        logs = os.path.join(tmp, "logs-with-sa")
+        # 3b) ※CR-010 sar のファイルを取り除いた構成でも完走すること
+        logs = os.path.join(tmp, "logs-without-sa")
         shutil.copytree(cls.normal_logs, logs)
-        with open(os.path.join(logs, "sa-host01-20260601.csv"),
-                  "w", encoding="utf-8", newline="\n") as handle:
-            handle.write("# hostname;interval;timestamp;CPU;%user\n")
-            handle.write("host01;600;2026-06-01 00:10:00 UTC;-1;1.23\n")
-        cls.with_sa_proc, cls.with_sa_work = run_with(
-            tmp, "with-sa", None, logs)
+        for name in os.listdir(logs):
+            if name.startswith("sa-"):
+                os.unlink(os.path.join(logs, name))
+        cls.without_sa_proc, cls.without_sa_work = run_with(
+            tmp, "without-sa", None, logs)
 
-        # 3c) [timezone] に sar のキーを書いた場合 (未知のキーとして無視される)
+        # 3c) [timezone] に sar のキーを書いた場合 (※CR-010 で既知のキーになった)
         cls.sar_key_proc, cls.sar_key_work = run_with(
             tmp, "sar-key",
             "[timezone]\nstorage = UTC\nsar = UTC\n", cls.normal_logs)
@@ -185,32 +189,29 @@ class TestA012WithoutSar(H.BaselineCase):
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
-    def test_01_runs_without_any_sar_input(self):
+    def test_01_runs_with_sar_input(self):
         self.assertEqual(self.plain_proc.returncode, 0,
                          H.err(self.plain_proc)[-2000:])
         self.assertTrue(H.summary_paths(self.plain_work))
 
-    def test_02_sa_csv_is_ignored(self):
-        """`sa-*.csv` を置いても**無視され、結果が変わらない**。"""
-        self.assertEqual(self.with_sa_proc.returncode, 0,
-                         H.err(self.with_sa_proc)[-2000:])
+    def test_02_runs_without_any_sar_file(self):
+        """※CR-010 **`sa-*.csv` が 1 件も無くても完走する**(後方互換)。"""
+        self.assertEqual(self.without_sa_proc.returncode, 0,
+                         H.err(self.without_sa_proc)[-2000:])
+        self.assertTrue(H.summary_paths(self.without_sa_work))
+        self.assertNotIn("sar /", H.read_all_reports(self.without_sa_work))
 
-        def normalize(work):
-            # 「対象ディレクトリ」は本試験でのみ別の場所へ複製しているため除く。
-            # **アプリの非決定性ではない。**
-            return [line for line in
-                    H.strip_volatile(H.read_all_reports(work)).splitlines()
-                    if not line.startswith("| 対象ディレクトリ |")]
+    def test_03_sar_key_is_accepted(self):
+        """※CR-010 **`[timezone] sar` は既知のキーである。** 警告を出さない。
 
-        self.assertEqual(normalize(self.with_sa_work),
-                         normalize(self.plain_work))
-
-    def test_03_sar_key_is_ignored_with_a_warning(self):
-        """**`[timezone] sar` はまだ未知のキーである。** 警告して無視し、止まらない。"""
+        `config.SOURCE_KINDS` に `sar` が無いと、ここが「未知のキー」に戻る。
+        そのとき**時刻変換が行われず、時差のある環境で突き合わせが静かに
+        全て外れる**(P007 U010 §3 #2)。
+        """
         self.assertEqual(self.sar_key_proc.returncode, 0,
                          H.err(self.sar_key_proc)[-2000:])
-        self.assertIn("未知のキー", H.err(self.sar_key_proc)
-                      + H.out(self.sar_key_proc))
+        combined = H.err(self.sar_key_proc) + H.out(self.sar_key_proc)
+        self.assertNotIn("未知のキー [timezone] sar", combined)
 
     def test_04_no_sar_key_is_required(self):
         """設定に sar が無くても、タイムゾーンの検証は通る。"""

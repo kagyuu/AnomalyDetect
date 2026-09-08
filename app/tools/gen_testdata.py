@@ -34,6 +34,27 @@ JVM_PAIRS = [("app01", "host01", "gcutil"), ("app02", "host02", "gc")]
 LSF_HOST = "lsfhost01"
 LSF_QUEUES = ["long", "normal", "short"]
 
+# ④ sar (※CR-010)。**既存 3 種別と同じホスト名・同じ時刻軸で出す** (P001 FR-150)。
+# 揃えないと「同時に発生したアノマリー」が成立せず、sar 対応の主目的
+# (アプリ層の異常と OS 資源の異常の突き合わせ) をテストで確認できない。
+SAR_HOSTS = ["host01", "host02", LSF_HOST]
+SAR_DEVICES = ["sda", "sdb"]
+SAR_IFACES = ["eth0", "eth1"]
+
+# ※CR-011 NFS サーバ役のホスト。**`nfsd` はこのホストだけに出す。**
+# 実環境では sadc が採取していれば全ホストで nfsd のブロックが出る
+# (サーバでなければ全て 0) が、**全て 0 の系列を増やしても情報が無い**。
+# その経路は単体テストで確認する (P001 FR-142c)。
+SAR_NFS_SERVER = "host02"
+
+# ※CR-011 取り込まれるメトリクスの数 (A006 の規模計算が参照する)。
+# `loaders.sar.WANTED` と一致させる。**生成ツールはアプリを import しない**
+# ため (配布資産の独立性)、ここに数え上げを置く。
+SAR_WANTED_NFS = ("call_s", "retrans_s", "read_s", "write_s",
+                  "access_s", "getatt_s")
+SAR_WANTED_NFSD = ("scall_s", "badcall_s", "hit_s", "miss_s",
+                   "sread_s", "swrite_s", "saccess_s", "sgetatt_s")
+
 # -gc 形式の容量 (固定値)
 GC_CAPACITY = {
     "s0c": 1024.0, "s1c": 1024.0, "ec": 8192.0, "oc": 20480.0,
@@ -260,6 +281,234 @@ def write_bqueues(logs_dir, series):
         )
 
 
+# ---------------------------------------------------------------------------
+# ④ sar (sysstat) — `sadf -d` の出力形式 (※CR-010)
+# ---------------------------------------------------------------------------
+#: `sadf -d` の見出し行。**実際の出力と同じ列を並べる**(取り込まない列も含む)。
+#: 取り込む列だけを並べると、「余分な列を読み飛ばす」経路がテストされない。
+SAR_HEADERS = {
+    "cpu": "CPU;%user;%nice;%system;%iowait;%steal;%idle",
+    "memory": ("kbmemfree;kbavail;kbmemused;%memused;kbbuffers;kbcached;"
+               "kbcommit;%commit"),
+    "swap_space": "kbswpfree;kbswpused;%swpused;kbswpcad;%swpcad",
+    "io": "tps;rtps;wtps;bread/s;bwrtn/s",
+    "load": "runq-sz;plist-sz;ldavg-1;ldavg-5;ldavg-15;blocked",
+    "swapping": "pswpin/s;pswpout/s",
+    "disk": "DEV;tps;rd_sec/s;wr_sec/s;avgrq-sz;avgqu-sz;await;svctm;%util",
+    "network": ("IFACE;rxpck/s;txpck/s;rxkB/s;txkB/s;rxcmp/s;txcmp/s;"
+                "rxmcst/s;%ifutil"),
+    # ※CR-011 NFS。取り込まない列 (packet/s, udp/s, tcp/s) も**実際の出力どおり**
+    # に並べる。並べないと「取り込まない列を飛ばす」経路が試されない。
+    "nfs": "call/s;retrans/s;read/s;write/s;access/s;getatt/s",
+    "nfsd": ("scall/s;badcall/s;packet/s;udp/s;tcp/s;hit/s;miss/s;"
+             "sread/s;swrite/s;saccess/s;sgetatt/s"),
+}
+
+#: ブロックを出す順序。**固定する**(NFR-009 の再現性)。
+SAR_ORDER = ["cpu", "memory", "swap_space", "io", "load", "swapping",
+             "disk", "network", "nfs", "nfsd"]   # ※CR-011
+
+#: `sadf` が出す採取間隔 (秒)。
+SAR_INTERVAL_SEC = INTERVAL_MINUTES * 60
+
+
+def _f(value, digits=2):
+    return "{0:.{1}f}".format(float(value), digits)
+
+
+def build_sar_series(rng, host):
+    """1 ホスト分の sar の系列を作る。
+
+    **CPU は内部で辻褄を合わせる** (`%idle` = 100 - その他)。合わせないと
+    `pct_idle` が独立した乱数になり、「夜間は遊休が続く」という実データの
+    形が出ない。**ALG-C1 の除外 (FR-148) を確かめるには、この形が要る**
+    (`pct_idle` が 90% 以上で数時間続く区間が実際にできる)。
+    """
+    user = baseline_series(rng, base=12.0, amplitude=22.0, sigma=2.0, floor=0.5)
+    system = baseline_series(rng, base=4.0, amplitude=6.0, sigma=0.8, floor=0.2)
+    iowait = baseline_series(rng, base=1.5, amplitude=2.5, sigma=0.4, floor=0.0)
+    nice = [0.0] * TOTAL_POINTS
+    steal = [0.0] * TOTAL_POINTS
+    idle = [max(0.0, 100.0 - (user[i] + system[i] + iowait[i]))
+            for i in range(TOTAL_POINTS)]
+
+    memused = baseline_series(rng, base=52.0, amplitude=12.0, sigma=1.5, floor=5.0)
+    commit = [min(99.0, v * 0.9 + 3.0) for v in memused]
+    memfree = [max(1024.0, (100.0 - v) * 320.0) for v in memused]
+    swpused = baseline_series(rng, base=2.0, amplitude=1.5, sigma=0.3, floor=0.0)
+
+    tps = baseline_series(rng, base=18.0, amplitude=24.0, sigma=2.5, floor=0.1)
+    bread = baseline_series(rng, base=420.0, amplitude=600.0, sigma=60.0, floor=1.0)
+    bwrtn = baseline_series(rng, base=310.0, amplitude=420.0, sigma=45.0, floor=1.0)
+
+    runq = baseline_series(rng, base=2.0, amplitude=4.0, sigma=0.6, floor=0.0)
+    ldavg1 = baseline_series(rng, base=1.4, amplitude=2.2, sigma=0.3, floor=0.0)
+    ldavg5 = [v * 0.9 for v in ldavg1]
+    blocked = baseline_series(rng, base=0.3, amplitude=0.6, sigma=0.15, floor=0.0)
+
+    pswpin = baseline_series(rng, base=0.2, amplitude=0.4, sigma=0.1, floor=0.0)
+    pswpout = baseline_series(rng, base=0.1, amplitude=0.3, sigma=0.08, floor=0.0)
+
+    disks = {}
+    for dev in SAR_DEVICES:
+        disks[dev] = {
+            "tps": baseline_series(rng, 14.0, 20.0, 2.0, floor=0.1),
+            "await": baseline_series(rng, 5.0, 6.0, 0.9, floor=0.1),
+            "util": baseline_series(rng, 18.0, 26.0, 3.0, floor=0.1),
+        }
+    ifaces = {}
+    for iface in SAR_IFACES:
+        ifaces[iface] = {
+            "rxkb": baseline_series(rng, 260.0, 380.0, 30.0, floor=1.0),
+            "txkb": baseline_series(rng, 180.0, 260.0, 22.0, floor=1.0),
+            "ifutil": baseline_series(rng, 9.0, 14.0, 1.5, floor=0.1),
+        }
+
+    # ※CR-011 NFS クライアント。全ホストが NFS を使う。
+    nfs_call = baseline_series(rng, 180.0, 240.0, 22.0, floor=1.0)
+    nfs = {
+        "call": nfs_call,
+        # **再送は平常時ほぼ 0 である。** 増えたら不調のしるし。
+        "retrans": baseline_series(rng, 0.05, 0.06, 0.02, floor=0.0),
+        "read": [v * 0.35 for v in nfs_call],
+        "write": [v * 0.20 for v in nfs_call],
+        "access": [v * 0.18 for v in nfs_call],
+        "getatt": [v * 0.22 for v in nfs_call],
+    }
+
+    # ※CR-011 NFS サーバ。**サーバ役のホストだけ値を持つ。**
+    if host == SAR_NFS_SERVER:
+        s_call = baseline_series(rng, 320.0, 420.0, 38.0, floor=1.0)
+        nfsd = {
+            "scall": s_call,
+            "badcall": baseline_series(rng, 0.02, 0.04, 0.01, floor=0.0),
+            "hit": [v * 0.88 for v in s_call],
+            "miss": [v * 0.12 for v in s_call],
+            "sread": [v * 0.33 for v in s_call],
+            "swrite": [v * 0.19 for v in s_call],
+            "saccess": [v * 0.17 for v in s_call],
+            "sgetatt": [v * 0.21 for v in s_call],
+        }
+    else:
+        nfsd = None
+
+    return {
+        "cpu": {"user": user, "nice": nice, "system": system,
+                "iowait": iowait, "steal": steal, "idle": idle},
+        "nfs": nfs,
+        "nfsd": nfsd,
+        "memory": {"memfree": memfree, "memused": memused, "commit": commit},
+        "swap_space": {"swpused": swpused},
+        "io": {"tps": tps, "bread": bread, "bwrtn": bwrtn},
+        "load": {"runq": runq, "ldavg1": ldavg1, "ldavg5": ldavg5,
+                 "blocked": blocked},
+        "swapping": {"pswpin": pswpin, "pswpout": pswpout},
+        "disk": disks,
+        "network": ifaces,
+    }
+
+
+def _sar_block_rows(activity, series, host, ts_text, i):
+    """1 時刻・1 活動分のデータ行を返す (デバイス単位で複数行になる)。"""
+    prefix = "{0};{1};{2};".format(host, SAR_INTERVAL_SEC, ts_text)
+    rows = []
+    if activity == "cpu":
+        c = series["cpu"]
+        rows.append(prefix + ";".join([
+            "-1", _f(c["user"][i]), _f(c["nice"][i]), _f(c["system"][i]),
+            _f(c["iowait"][i]), _f(c["steal"][i]), _f(c["idle"][i])]))
+    elif activity == "memory":
+        m = series["memory"]
+        used_kb = 32768000.0 * m["memused"][i] / 100.0
+        rows.append(prefix + ";".join([
+            _f(m["memfree"][i], 0), _f(m["memfree"][i] * 1.1, 0),
+            _f(used_kb, 0), _f(m["memused"][i]),
+            "204800", "1048576", _f(used_kb * 0.8, 0), _f(m["commit"][i])]))
+    elif activity == "swap_space":
+        w = series["swap_space"]
+        used_kb = 8388608.0 * w["swpused"][i] / 100.0
+        rows.append(prefix + ";".join([
+            _f(8388608.0 - used_kb, 0), _f(used_kb, 0), _f(w["swpused"][i]),
+            "0", "0.00"]))
+    elif activity == "io":
+        b = series["io"]
+        rows.append(prefix + ";".join([
+            _f(b["tps"][i]), _f(b["tps"][i] * 0.6), _f(b["tps"][i] * 0.4),
+            _f(b["bread"][i]), _f(b["bwrtn"][i])]))
+    elif activity == "load":
+        q = series["load"]
+        rows.append(prefix + ";".join([
+            _f(q["runq"][i], 0), "180", _f(q["ldavg1"][i]), _f(q["ldavg5"][i]),
+            _f(q["ldavg5"][i] * 0.95), _f(q["blocked"][i], 0)]))
+    elif activity == "swapping":
+        p = series["swapping"]
+        rows.append(prefix + ";".join([_f(p["pswpin"][i]), _f(p["pswpout"][i])]))
+    elif activity == "disk":
+        for dev in SAR_DEVICES:
+            d = series["disk"][dev]
+            rows.append(prefix + ";".join([
+                dev, _f(d["tps"][i]), _f(d["tps"][i] * 32.0),
+                _f(d["tps"][i] * 18.0), "46.83", "0.09",
+                _f(d["await"][i]), "0.61", _f(d["util"][i])]))
+    elif activity == "nfs":                       # ※CR-011
+        n = series["nfs"]
+        rows.append(prefix + ";".join([
+            _f(n["call"][i]), _f(n["retrans"][i]), _f(n["read"][i]),
+            _f(n["write"][i]), _f(n["access"][i]), _f(n["getatt"][i])]))
+    elif activity == "nfsd":                      # ※CR-011
+        d = series["nfsd"]
+        if d is None:
+            # **NFS サーバでないホストにはブロックを出さない。**
+            return []
+        rows.append(prefix + ";".join([
+            _f(d["scall"][i]), _f(d["badcall"][i]),
+            # packet/s, udp/s, tcp/s は**取り込まない列**だが、実際の出力に
+            # 現れるため並べる (飛ばす経路を試すため。P001 FR-142b)
+            _f(d["scall"][i] * 1.05), _f(d["scall"][i] * 0.02),
+            _f(d["scall"][i] * 0.98),
+            _f(d["hit"][i]), _f(d["miss"][i]), _f(d["sread"][i]),
+            _f(d["swrite"][i]), _f(d["saccess"][i]), _f(d["sgetatt"][i])]))
+    elif activity == "network":
+        for iface in SAR_IFACES:
+            n = series["network"][iface]
+            rows.append(prefix + ";".join([
+                iface, _f(n["rxkb"][i] * 2.4), _f(n["txkb"][i] * 2.1),
+                _f(n["rxkb"][i]), _f(n["txkb"][i]), "0.00", "0.00", "0.00",
+                _f(n["ifutil"][i])]))
+    return rows
+
+
+def write_sar(logs_dir, all_series):
+    """`sa-{host}-{yyyymmdd}.csv` を書く (※CR-010)。
+
+    **活動種別ごとのブロックを、時刻ごとに並べる。** `sadf` を活動ごとに
+    呼んで連結したファイル (README 付録A の変換スクリプト) と同じ形にするなら
+    ブロックごとにまとめるほうが近いが、**見出しが何度も現れる形のほうが
+    ローダの状態遷移を厳しく試せる**ため、時刻ごとに切り替える。
+    """
+    for host, series in sorted(all_series.items()):
+        for d in range(DAYS):
+            lo, hi = day_slice(d)
+            if lo >= TOTAL_POINTS:
+                break
+            date = TIMESTAMPS[lo].strftime("%Y%m%d")
+            lines = []
+            for i in range(lo, hi):
+                ts_text = TIMESTAMPS[i].strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+                for activity in SAR_ORDER:
+                    block = _sar_block_rows(activity, series, host, ts_text, i)
+                    # ※CR-011 出す行が無い活動は**見出しごと出さない**
+                    # (NFS サーバでないホストの nfsd)。
+                    if not block:
+                        continue
+                    lines.append("# hostname;interval;timestamp;"
+                                 + SAR_HEADERS[activity])
+                    lines.extend(block)
+            write_lines(
+                os.path.join(logs_dir, "sa-{0}-{1}.csv".format(host, date)),
+                lines)
+
+
 def cumulative(rng, per_point_mean, per_point_sigma, scale=1.0, start=0.0):
     """単調増加する累積値を作る。"""
     out = []
@@ -437,6 +686,124 @@ def generate_normal(out_dir):
         "expect_min_severity": "FATAL",
         "description": "pend が 1→200 へ単調増加し run は横ばい(ジョブ滞留相当)",
     })
+
+    # --- ④ sar (※CR-010) -------------------------------------------------
+    sar_series = {}
+    for host in SAR_HOSTS:
+        sar_series[host] = build_sar_series(rng, host)
+
+    # ★sar の `cpu` のデバイス列は CPU 番号であり、`-1` が「全 CPU」を意味する。
+    #   したがって系列キーは `sar/{host}/cpu/-1` になる (`-` ではない)。
+    #   `-` は「デバイス列を持たない活動」の占位子である (P001 FR-144)。
+    # INJ-010: host01 の %iowait に単発スパイク。
+    # **INJ-001 (同じ host01 の DB コネクション数のスパイク) と同時刻にする。**
+    # 狙いは「アプリ層の異常と OS 資源の異常が、同時に発生したアノマリーとして
+    # 相互に現れること」の確認である (P001 FR-150)。どちらも観点1 であり、
+    # 観点2 を含むイベントでは欄ごと出ない (CR-002) 制約に触れない。
+    sar_spike_at = datetime(2026, 6, 5, 14, 0, 0)
+    inject_spike(sar_series["host01"]["cpu"]["iowait"], sar_spike_at, 10.0)
+    injected.append({
+        "id": "INJ-010", "kind": "spike",
+        "series_id": "sar/host01/cpu/-1", "metric": "pct_iowait",
+        "from": sar_spike_at.isoformat(), "to": sar_spike_at.isoformat(),
+        "expect_algorithms": ["ALG-A1", "ALG-A2"],
+        "expect_min_severity": "WARN",
+        "description": "%iowait が平常の 10 倍に跳ねた (INJ-001 と同一ホスト・同時刻)",
+    })
+
+    # INJ-011: host02 の %memused が 6/8 12:00 以降 93〜97% に張り付く。
+    # **ALG-C1 が「推定上限」ではなく上限 100 で判定すること**の確認を兼ねる
+    # (P001 FR-148)。sar の比率は上限が自明であり ADR-016 の推定を通らない。
+    mem_at = datetime(2026, 6, 8, 12, 0, 0)
+    mem_from = index_of(mem_at)
+    memused = sar_series["host02"]["memory"]["memused"]
+    for i in range(mem_from, TOTAL_POINTS):
+        memused[i] = 93.0 + rng.random() * 4.0
+    # 派生列の辻褄を合わせる (使用率が上がれば空きは減る)
+    sar_series["host02"]["memory"]["commit"] = [
+        min(99.0, v * 0.9 + 3.0) for v in memused]
+    sar_series["host02"]["memory"]["memfree"] = [
+        max(1024.0, (100.0 - v) * 320.0) for v in memused]
+    injected.append({
+        "id": "INJ-011", "kind": "saturation",
+        "series_id": "sar/host02/memory/-", "metric": "pct_memused",
+        "from": mem_at.isoformat(), "to": PERIOD_TO.isoformat(),
+        "expect_algorithms": ["ALG-C1"],
+        "expect_min_severity": "WARN",
+        "description": "%memused が 93〜97% に張り付いたまま戻らない (上限 100 は自明)",
+    })
+
+    # INJ-012: host02 のスワップアウトが 6/10 12:00 以降に急増する。
+    # **INJ-011 (同じ host02 のメモリ張り付き) の帰結として自然な形にする。**
+    # 併せて、8 活動すべてがイベントとして現れる状態にする (A014 #5)。
+    # ★ベースラインが 0.1 前後と小さいため、スパイクでは `effective_sigma` の
+    #   下限 (sigma_floor_abs=0.5) に埋もれて検知されない。水準そのものを
+    #   上げる形にする。★
+    swap_at = datetime(2026, 6, 10, 12, 0, 0)
+    swap_from = index_of(swap_at)
+    swp = sar_series["host02"]["swapping"]
+    for i in range(swap_from, TOTAL_POINTS):
+        swp["pswpout"][i] = 30.0 + rng.random() * 40.0
+        swp["pswpin"][i] = 20.0 + rng.random() * 30.0
+    injected.append({
+        "id": "INJ-012", "kind": "level_shift",
+        "series_id": "sar/host02/swapping/-", "metric": "pswpout_s",
+        "from": swap_at.isoformat(), "to": PERIOD_TO.isoformat(),
+        "expect_algorithms": ["ALG-B4"],
+        "expect_min_severity": "WARN",
+        "description": "スワップアウトが 0.1 前後から 30〜70 へ跳ね上がり戻らない",
+    })
+
+    # INJ-013: lsfhost01 の NFS 再送が 6/9 12:00 以降に急増する。
+    # **lsfhost01 は LSF のジョブ滞留 (INJ-006) と同じホストである。**
+    # 依頼者が指摘した「LSF 計算グリッドが NFS でファイルを共有するため、
+    # NFS の詰まりがジョブ滞留の原因になりうる」という因果を、
+    # **レポート上で突き合わせられる形**にする (P001 FR-142a)。
+    # ★ベースラインが 0.05 前後と小さいため、スパイクでは effective_sigma の
+    #   下限 (ADR-003) に埋もれる。水準そのものを上げる (INJ-012 と同じ理由)。★
+    nfs_at = datetime(2026, 6, 9, 12, 0, 0)
+    nfs_from = index_of(nfs_at)
+    retrans = sar_series[LSF_HOST]["nfs"]["retrans"]
+    for i in range(nfs_from, TOTAL_POINTS):
+        retrans[i] = 8.0 + rng.random() * 7.0
+    injected.append({
+        "id": "INJ-013", "kind": "level_shift",
+        "series_id": "sar/{0}/nfs/-".format(LSF_HOST), "metric": "retrans_s",
+        "from": nfs_at.isoformat(), "to": PERIOD_TO.isoformat(),
+        "expect_algorithms": ["ALG-B4"],
+        "expect_min_severity": "WARN",
+        "description": "NFS の再送が 0.05 前後から 8〜15 へ跳ね上がり戻らない"
+                       "(LSF のジョブ滞留 INJ-006 と同一ホスト)",
+    })
+
+    # INJ-014: NFS サーバ (host02) の応答キャッシュ失敗が 6/11 以降に上昇する。
+    # **nfsd からもイベントが出ることを保証する。**
+    nfsd_at = datetime(2026, 6, 11, 0, 0, 0)
+    nfsd_from = index_of(nfsd_at)
+    miss = sar_series[SAR_NFS_SERVER]["nfsd"]["miss"]
+    for i in range(nfsd_from, TOTAL_POINTS):
+        miss[i] = miss[i] * 4.0 + 120.0
+    injected.append({
+        "id": "INJ-014", "kind": "level_shift",
+        "series_id": "sar/{0}/nfsd/-".format(SAR_NFS_SERVER),
+        "metric": "miss_s",
+        "from": nfsd_at.isoformat(), "to": PERIOD_TO.isoformat(),
+        "expect_algorithms": ["ALG-B4"],
+        "expect_min_severity": "WARN",
+        "description": "NFS サーバの応答キャッシュ失敗が段階的に上昇した",
+    })
+
+    # **%idle は他の CPU 時間の残りである。** 注入のあとに計算し直さないと
+    # 合計が 100 を超え、実データにならない (ALG-C1 の除外の確認に効く)。
+    for host in SAR_HOSTS:
+        c = sar_series[host]["cpu"]
+        c["idle"] = [
+            max(0.0, 100.0 - (c["user"][i] + c["nice"][i] + c["system"][i]
+                              + c["iowait"][i] + c["steal"][i]))
+            for i in range(TOTAL_POINTS)
+        ]
+
+    write_sar(logs_dir, sar_series)
 
     injected.sort(key=lambda x: x["id"])
     expected = {

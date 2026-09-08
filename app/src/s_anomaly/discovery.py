@@ -1,6 +1,7 @@
 """M03 discovery — ファイル探索と種別判定 (P003 4章)。
 
-3 パターンのファイル名を識別する。中身は読まない (T2 以降の担当)。
+4 パターンのファイル名を識別する。中身は読まない (T2 以降の担当)。
+※CR-010 で sar (`sa-{host}-{yyyymmdd}.csv`) を追加した。
 """
 
 import os
@@ -12,9 +13,13 @@ STEP = "S3"
 KIND_DBCONN = "db_connection"
 KIND_JVMGC = "jvm_gc"
 KIND_LSF = "lsf_queue"
+KIND_SAR = "sar"          # ※CR-010
 
 _DBCONN_RE = re.compile(r"^DBConnection_(\d{8})\.csv$")
 _LSF_RE = re.compile(r"^bqueues_(.+)_(\d{8})\.txt$")
+#: ※CR-010 `(.+)` は貪欲一致。末尾の 8 桁数字が分割位置を一意に決めるため、
+#: **ホスト名に `-` を含んでいても正しく分かれる** (DS-03-02a)。
+_SAR_RE = re.compile(r"^sa-(.+)-(\d{8})\.csv$")
 _DATE_RE = re.compile(r"^\d{8}$")
 
 
@@ -46,6 +51,11 @@ def classify(name: str) -> Optional[dict]:
     m = _LSF_RE.match(name)
     if m:
         return {"kind": KIND_LSF, "host": m.group(1), "date": m.group(2)}
+
+    # ④ sa-{ホスト名}-{yyyymmdd}.csv  ※CR-010
+    m = _SAR_RE.match(name)
+    if m:
+        return {"kind": KIND_SAR, "host": m.group(1), "date": m.group(2)}
 
     # ② {コンテナ名}_gc_{ホスト名}_{yyyymmdd}.txt
     if not name.endswith(".txt"):
@@ -101,15 +111,15 @@ def discover(root: str, progress) -> List[LogFile]:
 
     found.sort(key=lambda f: (f.date or "", f.path))
 
-    by_kind = {KIND_DBCONN: 0, KIND_JVMGC: 0, KIND_LSF: 0}
+    by_kind = {KIND_DBCONN: 0, KIND_JVMGC: 0, KIND_LSF: 0, KIND_SAR: 0}
     for f in found:
         by_kind[f.kind] += 1
     progress.info(
         STEP,
         "探索したファイル総数 {0} 件 / 対象 {1} 件 "
-        "(DBコネクション {2}, jstat {3}, LSFキュー {4}) / 対象外 {5} 件".format(
+        "(DBコネクション {2}, jstat {3}, LSFキュー {4}, sar {5}) / 対象外 {6} 件".format(
             total, len(found), by_kind[KIND_DBCONN], by_kind[KIND_JVMGC],
-            by_kind[KIND_LSF], skipped,
+            by_kind[KIND_LSF], by_kind[KIND_SAR], skipped,
         ),
     )
     return found

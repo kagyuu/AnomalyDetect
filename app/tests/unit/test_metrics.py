@@ -9,6 +9,16 @@ from datetime import datetime, timedelta
 from s_anomaly import bootstrap, metrics, progress as progress_mod, schema
 from s_anomaly.loaders import BatchInserter
 
+#: ※CR-010 sar を除いた、既存 3 種別のメトリクス。
+#: `_seed` が投入するのは 3 テーブルだけであり、sar のメトリクスは現れない。
+LEGACY_METRICS = sorted([
+    "active_connections",
+    "ou", "eu", "mu", "ou_pct", "eu_pct", "mu_pct",
+    "fgc_delta", "fgct_delta", "ygct_delta",
+    "njobs", "pend", "run", "susp",
+])
+
+#: 検知対象 + 導出比率の全体 (sar を含む)。
 EXPECTED_METRICS = sorted(metrics.DETECTABLE_METRICS + metrics.RATIO_METRICS)
 
 
@@ -182,15 +192,63 @@ class TestBuildMetrics(MetricsFixture):
         self.build()
 
     def test_metric_kinds(self):
+        """※CR-010 sar を投入していないので、現れるのは既存 14 種だけである。"""
         self._seed()
         got = sorted(r[0] for r in self.q("SELECT DISTINCT metric FROM metrics"))
-        self.assertEqual(got, EXPECTED_METRICS)
+        self.assertEqual(got, LEGACY_METRICS)
         self.assertEqual(len(got), 14)
 
     def test_detectable_metrics_constant(self):
-        self.assertEqual(len(metrics.DETECTABLE_METRICS), 11)
+        """※CR-010 で 11 + 22 = 33、※CR-011 で NFS の 14 件を足して 47。"""
+        self.assertEqual(len(metrics.DETECTABLE_METRICS), 47)
+        self.assertEqual(len(set(metrics.DETECTABLE_METRICS)), 47,
+                         "重複があってはならない")
         for name in metrics.RATIO_METRICS:
             self.assertNotIn(name, metrics.DETECTABLE_METRICS)
+
+    def test_sar_joins_the_metrics_table(self):
+        """※CR-010 `sar` テーブルが `metrics` へ合流すること (DS-07-07a)。
+
+        **系列キーの形と `segment` を確かめる。** sar には累積値のリセットが
+        無いため `segment` は常に 0 である。
+        """
+        base = datetime(2026, 6, 1)
+        ins = BatchInserter(self.con, "sar")
+        for i in range(5):
+            ins.add({"ts": base + timedelta(minutes=5 * i), "host": "host01",
+                     "activity": "disk", "device": "sda",
+                     "metric": "pct_util", "value": 10.0 + i})
+            ins.add({"ts": base + timedelta(minutes=5 * i), "host": "host01",
+                     "activity": "memory", "device": "-",
+                     "metric": "pct_memused", "value": 50.0 + i})
+        ins.flush()
+        self.build()
+        rows = self.q("SELECT series_id, source, metric, segment FROM metrics "
+                      "WHERE source = 'sar' ORDER BY series_id, metric")
+        self.assertTrue(rows, "sar が metrics に合流していない")
+        series = sorted({r[0] for r in rows})
+        self.assertEqual(series,
+                         ["sar/host01/disk/sda", "sar/host01/memory/-"])
+        self.assertEqual({r[3] for r in rows}, {0})
+
+    def test_sar_series_appear_in_list_series(self):
+        """★`DETECTABLE_METRICS` への登録漏れを捕まえる★ (P003 DS-07-07b)。
+
+        **登録漏れは例外を出さない。** `list_series` が返さなくなるだけであり、
+        検知が 1 件も起きないまま正常終了する。
+        """
+        base = datetime(2026, 6, 1)
+        ins = BatchInserter(self.con, "sar")
+        for i in range(40):
+            ins.add({"ts": base + timedelta(minutes=5 * i), "host": "host01",
+                     "activity": "memory", "device": "-",
+                     "metric": "pct_memused", "value": 50.0 + i})
+        ins.flush()
+        self.build()
+        metas = metrics.list_series(self.con)
+        sar_metas = [m for m in metas if m.source == "sar"]
+        self.assertEqual(len(sar_metas), 1, "sar の系列が検知対象に現れていない")
+        self.assertEqual(sar_metas[0].metric, "pct_memused")
 
     def test_series_id_formats(self):
         self._seed()

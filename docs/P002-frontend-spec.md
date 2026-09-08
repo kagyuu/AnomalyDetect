@@ -110,6 +110,8 @@ usage: s_anomaly.py <dir>
 | `[timezone]` | `db_connection` | 文字列 | `UTC` | 同上 | 終了コード 3 |   ※CR-008
 | `[timezone]` | `jvm_gc` | 文字列 | `UTC` | 同上 | 終了コード 3 |   ※CR-008
 | `[timezone]` | `lsf_queue` | 文字列 | `UTC` | 同上 | 終了コード 3 |   ※CR-008
+| `[timezone]` | `sar` | 文字列 | `UTC` | 同上 | 終了コード 3 |   ※CR-010
+| `[sar]` | `activities` | 文字列(カンマ区切り) | `cpu,memory,swap_space,io,load,swapping,disk,network,nfs,nfsd` ※CR-011 | **10 語**のいずれか。**未知の語は WARNING を出して無視**(UI-02-V01 と同じ扱い)。**空文字は「sar を取り込まない」を意味し、エラーにしない** | **警告(未知の語)/ 終了コード 3(値そのものが読み取れない場合)** |   ※CR-010 ※P012 #1 により是正
 
 > **追記(P003 による)**: 上表の末尾 5 キー(`common.sigma_floor_ratio`, `common.sigma_floor_abs`, `ALG-B2.max_buckets`, `events.severe_pct`, `events.merge_gap_minutes`)は、`docs/P003-backend-spec.md` 15章の要請により追加した。それぞれ、ゼロ分散系列での誤検知抑制(DS-08-03)、Mann-Kendall の計算量抑制(DS-08-B2-02)、SEVERE 判定の閾値(DS-09-05)、イベント統合の近接判定(DS-09-01)に必要である。データモデル(6章)への変更はない。
 
@@ -160,6 +162,8 @@ YYYY-MM-DD HH:MM:SS [LEVEL] [ステップID] メッセージ
 | S2 | 設定ファイルの読み込み元、既定値からの変更点、無効なアルゴリズム名 | INFO |
 | S2 | 未知のキーを無視したこと | WARNING |
 | S3 | 探索したファイル総数、種別ごとの該当件数、対象外として読み飛ばした件数 | INFO |
+| S4 | **sar の時刻列のタイムゾーン表記が `[timezone] sar` と食い違ったこと**(ファイル単位で 1 回) ※CR-010 | WARNING |
+| S4 | **sar の未知の活動種別・未知の列を読み飛ばしたこと**(種別・列名ごとに 1 回) ※CR-010 | WARNING |
 | S4 | **1 ファイル読むごとに** `[{処理済}/{総数}] {ファイル名} ({行数}行, スキップ{件})` | INFO |
 | S4 | 解析できない行があったファイルと、その理由・件数 | WARNING |
 | S5 | 系列数、メトリクス数、対象期間(最小時刻〜最大時刻)、総レコード数 | INFO |
@@ -359,6 +363,37 @@ YYYY-MM-DD HH:MM:SS [LEVEL] [ステップID] メッセージ
 | 説明 | アルゴリズムごとの判定根拠(統計量と閾値)を、統合された数だけ並べる | 否 |
 | 原因候補 | P001 12.1 の知識表から引き当てた候補を `{候補} (確度: 高/中/低) — {根拠}` の形で 1 行 1 件。**該当なしの場合は「該当する候補なし (確度: —)」と書く** | 否 |
 | 同時に発生したアノマリー | **※CR-002により全面変更**(従来は「同時刻のその他のデータ」)。4.5 の規則で求めた最大 10 件を `- ` の箇条書きにする。**観点2(ALG-B*)を含むイベントでは、この項目行ごと出力しない。** 観点1 のみのイベントで重なる相手が無い場合は `- (同じ時間帯に検知された他のアノマリーはありません)` と書く | 否(ただし観点2 を含むイベントでは項目ごと省略する) |
+
+**UI-04-01a** ※CR-010: **sar のメトリクスの和名は次のとおりとする。** 「データ」欄の `{系列キーの各要素}` には `activity=disk, device=sda` のように**活動とデバイスを併記する**(デバイスを持たない活動は `device` を書かない)。
+
+| metric | 和名 | metric | 和名 |
+| --- | --- | --- | --- |
+| `pct_user` | CPU ユーザ使用率 | `pswpin_s` | スワップイン(ページ/秒) |
+| `pct_system` | CPU システム使用率 | `pswpout_s` | スワップアウト(ページ/秒) |
+| `pct_iowait` | CPU I/O 待ち率 | `tps` | I/O 転送回数(回/秒) |
+| `pct_idle` | CPU 遊休率 | `bread_s` | 読み込みブロック数(/秒) |
+| `pct_memused` | メモリ使用率 | `bwrtn_s` | 書き込みブロック数(/秒) |
+| `pct_commit` | メモリコミット率 | `runq_sz` | 実行待ちプロセス数 |
+| `kbmemfree` | 空きメモリ (KB) | `ldavg_1` | ロードアベレージ (1 分) |
+| `pct_swpused` | スワップ使用率 | `ldavg_5` | ロードアベレージ (5 分) |
+| `pct_util` | デバイス使用率 | `blocked` | I/O 待ちブロック数 |
+| `await` | I/O 平均応答時間 (ms) | `rxkb_s` | 受信 (KB/秒) |
+| `pct_ifutil` | インタフェース使用率 | `txkb_s` | 送信 (KB/秒) |
+
+**NFS のメトリクスの和名** ※CR-011
+
+| metric | 和名 | metric | 和名 |
+| --- | --- | --- | --- |
+| `call_s` | NFS 要求 (回/秒) | `scall_s` | NFS サーバ受信要求 (回/秒) |
+| **`retrans_s`** | **NFS 再送 (回/秒)** | **`badcall_s`** | **NFS サーバ不正要求 (回/秒)** |
+| `read_s` | NFS 読み込み要求 (回/秒) | `hit_s` | NFS 応答キャッシュ命中 (回/秒) |
+| `write_s` | NFS 書き込み要求 (回/秒) | **`miss_s`** | **NFS 応答キャッシュ失敗 (回/秒)** |
+| `access_s` | NFS アクセス権確認 (回/秒) | `sread_s` | NFS サーバ読み込み (回/秒) |
+| `getatt_s` | NFS 属性取得 (回/秒) | `swrite_s` | NFS サーバ書き込み (回/秒) |
+| | | `saccess_s` | NFS サーバアクセス権確認 (回/秒) |
+| | | `sgetatt_s` | NFS サーバ属性取得 (回/秒) |
+
+**和名が引けないメトリクスは、metric 名をそのまま出す**(未知の列を読み飛ばさずに取り込む将来の拡張で、和名の登録漏れによって出力が壊れないようにするため)。
 
 **UI-04-02**: **すべての項目は必ず出力する。** 値が得られない場合も項目行を省略せず、上表の定型文を書く。**※CR-002による唯一の例外**: 「同時に発生したアノマリー」は、観点2(ALG-B1〜B5)を含むイベントでは項目行ごと出力しない。後段の LLM が項目の欠落を「異常がない」と誤読することを防ぐ。
 
@@ -590,6 +625,21 @@ erDiagram
 | `queue` | VARCHAR | NOT NULL | 論理 PK(3/3) | 見出し行の列名から抽出 |
 | `njobs`,`pend`,`run`,`susp` | BIGINT | NULL 可 | 0 以上 | 値が `-`/空のとき NULL |
 
+#### 6.2.3a `sar` ※CR-010により新設
+
+**活動種別ごとに列構成が違うため、縦持ち (long) で持つ。** 理由は `docs/P001-requirement.md` 5.3a の ★ACCEPTED★ を参照。
+
+| カラム | 型 | NULL | 制約 | 説明 |
+| --- | --- | --- | --- | --- |
+| `ts` | TIMESTAMP | NOT NULL | 論理 PK(1/5) | `timestamp` 列。タイムゾーン表記は取り込み時に落とす |
+| `host` | VARCHAR | NOT NULL | 論理 PK(2/5) | **ファイル名から抽出**(データ行の第 1 列ではない。P001 FR-146) |
+| `activity` | VARCHAR | NOT NULL | 論理 PK(3/5) | `cpu` / `memory` / `swap_space` / `io` / `load` / `swapping` / `disk` / `network` |
+| `device` | VARCHAR | NOT NULL | 論理 PK(4/5) | デバイス列の値。デバイスを持たない活動は `-` |
+| `metric` | VARCHAR | NOT NULL | 論理 PK(5/5) | 正規化した列名(P001 FR-143)。例 `pct_memused` |
+| `value` | DOUBLE | NULL 可 | | 値が `-`/空のとき NULL(P001 FR-015 と同じ扱い) |
+
+**論理 PK は 5 列**(`ts` / `host` / `activity` / `device` / `metric`)である。他の 3 テーブルと違い**メトリクス名まで含めないと 1 行を特定できない**(縦持ちのため)。重複排除(P001 FR-013)はこの 5 列で行う。
+
 #### 6.2.4 `metrics` (ビュー)
 
 | カラム | 型 | NULL | 説明 |
@@ -618,6 +668,7 @@ erDiagram
 | `db_connection` | `db_connection/{host}:{port}/{datasource}` | `db_connection/host01:7003/OraclePool_1` |
 | `jvm_gc` | `jvm_gc/{container}@{host}` | `jvm_gc/app01@host01` |
 | `lsf_queue` | `lsf_queue/{host}/{queue}` | `lsf_queue/lsfhost01/normal` |
+| **`sar`** ※CR-010 | `sar/{host}/{activity}/{device}` | `sar/host01/disk/sda` / `sar/host01/cpu/-1`(`-1` は全 CPU。sar の CPU 列そのまま)/ `sar/host01/memory/-`(デバイスを持たない活動は占位子 `-`)/ **`sar/host01/nfs/-` ※CR-011** |
 
 **UI-06-01**: `series_id` はレポートの「データ」欄と、4.5 の「同時に発生したアノマリー」の並び順(同一ホストの判定)、および**レポートの分割先ホストの決定**(UI-04-F02)に使う。※CR-001・CR-002により変更ホスト名の抽出が必要なため、上表の書式を固定とする。
 
@@ -647,7 +698,7 @@ sequenceDiagram
     participant BS as bootstrap (M14)
     participant CFG as config (M02)
     participant DSC as discovery (M03)
-    participant LDR as loader.* (M04-M06)
+    participant LDR as loader.* (M04-M06, M16 ※CR-010)
     participant DB as DuckDB
     participant MET as metrics (M07)
     participant DET as detector.* (M08)
@@ -732,6 +783,7 @@ python tools/gen_testdata.py <出力先dir> [--broken]
 | `{出力先}/logs/DBConnection_{yyyymmdd}.csv` | ①。14 日分 × ホスト 2 台 × ポート 1 × データソース 3 |
 | `{出力先}/logs/{container}_gc_{host}_{yyyymmdd}.txt` | ②。14 日分 × **2 組**(`app01@host01` と `app02@host02`。全組み合わせではなく、この 2 組のみ) = 28 ファイル。**`app01` は `-gcutil` 形式、`app02` は `-gc` 形式**で出力し、FR-012 の両形式を確実に踏む |
 | `{出力先}/logs/bqueues_{host}_{yyyymmdd}.txt` | ③。14 日分 × ホスト 1 × QUEUE 3 |
+| `{出力先}/logs/sa-{host}-{yyyymmdd}.csv` | ④ ※CR-010。14 日分 × ホスト 3 台(`host01` / `host02` / `lsfhost01`。**既存 3 種別と同じホスト名・同じ時刻軸**。P001 FR-150)。**10 種類**の活動ブロックを含み(※CR-011)、`disk` は 2 デバイス、`network` は 2 インタフェースを出す。**`nfs` は 3 ホストすべて、`nfsd` は NFS サーバ役の `host02` だけ**に出す |
 | `{出力先}/expected.json` | 正解ファイル(8.3) |
 
 **UI-08-01**: サンプリング間隔は 5 分固定とする(14 日 × 288 点/日 = 4,032 点/系列)。ALG-A5 が要求する最小 2 週間(UI-02 の `ALG-A5.min_weeks`=2)をちょうど満たす。★FIXME★ (間隔と期間は Agent の想定。実環境の採取間隔が異なる場合、10.4 のパラメータ既定値も見直しが必要)

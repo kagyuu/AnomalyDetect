@@ -14,10 +14,22 @@ from datetime import datetime
 _EVENT_HEAD = re.compile(
     r"^# イベントID\(\s*(?P<id>EVT-\d{8}-.+?-\d{3})\s*\)\s*$")
 _ITEM = re.compile(r"^\* (?P<key>[^:]+?)\s*:\s*(?P<value>.*)$")
+#: 「データ」欄。`{source} / {metric} ({和名}) / {系列キー}` を分解する。
+#:
+#: ※CR-010 **和名に括弧が含まれても壊れないようにした。** 以前は
+#: `\([^)]*\)` で和名を読み飛ばしていたため、「受信 (KB/秒)」のように
+#: 括弧を含む和名で照合が外れ、**そのイベントが「検知漏れ」に見えていた**。
+#: 系列キーには `/` が現れないため、**末尾を `[^/]*` で受ける**ことで
+#: 和名側の貪欲一致を安全に止められる。
 _DATA = re.compile(
-    r"^(?P<source>\S+)\s*/\s*(?P<metric>[A-Za-z0-9_]+)(?:\s*\([^)]*\))?\s*/\s*(?P<key>.*)$"
+    r"^(?P<source>[A-Za-z0-9_]+)\s*/\s*(?P<metric>[A-Za-z0-9_]+)"
+    r"(?:\s*\(.*\))?\s*/\s*(?P<key>[^/]*)$"
 )
-_ALG = re.compile(r"(ALG-[AB]\d)")
+
+#: ※CR-005 で ALG-C1(観点3)が加わっている。**`[AB]` のままだと
+#: ALG-C1 だけを持つイベントの「イベント種別」が空になり、
+#: 期待アルゴリズムとの照合が必ず外れる。**
+_ALG = re.compile(r"(ALG-[A-C]\d)")
 
 
 class ParsedEvent(object):
@@ -59,6 +71,12 @@ class ParsedEvent(object):
         if self.source == "lsf_queue":
             return "lsf_queue/{0}/{1}".format(
                 pairs.get("host", ""), pairs.get("queue", ""))
+        if self.source == "sar":                       # ※CR-010
+            # **レポートは device が占位子 `-` のとき `device=` を書かない。**
+            # 復元するときに補う (P002 UI-04-01a)。
+            return "sar/{0}/{1}/{2}".format(
+                pairs.get("host", ""), pairs.get("activity", ""),
+                pairs.get("device", "-"))
         return self.series_key
 
 

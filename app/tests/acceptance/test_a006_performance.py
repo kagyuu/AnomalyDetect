@@ -151,9 +151,40 @@ def rescale(days, db_hosts, db_sources, lsf_queues):
     points = G.TOTAL_POINTS
     db_rows = db_hosts * db_sources * points
     jstat_rows = GENERATED_JVM_PAIRS * points
-    table_rows = db_rows + jstat_rows + lsf_queues * points
-    file_rows = db_rows + jstat_rows + points
+    # ※CR-010 sar。**規模は変えない**(SAR_HOSTS は 3 台のまま)。
+    # 1 時刻あたり、ホストごとに `sar.ALL_METRICS` 相当のレコードが増える。
+    # デバイス単位の 2 活動は 2 台ずつあるため、単純な 22 件ではない。
+    sar_rows = (len(G.SAR_HOSTS) * SAR_METRICS_PER_POINT
+                + SAR_NFSD_METRICS_PER_POINT) * points        # ※CR-011
+    # ファイル上の行数は「1 時刻あたりのデータ行数」で数える
+    # (cpu/memory/swap/io/load/swapping/nfs が 1 行ずつ + disk 2 + network 2、
+    #  加えてサーバ役 1 ホストの nfsd が 1 行)
+    sar_file_rows = (len(G.SAR_HOSTS) * SAR_LINES_PER_POINT
+                     + SAR_NFSD_LINES_PER_POINT) * points     # ※CR-011
+    table_rows = db_rows + jstat_rows + lsf_queues * points + sar_rows
+    file_rows = db_rows + jstat_rows + points + sar_file_rows
     return table_rows, file_rows
+
+
+#: ※CR-010 sar が 1 時刻・1 ホストあたりに生むレコード数。
+#: 内訳: cpu 4 + memory 3 + swap_space 1 + io 3 + load 4 + swapping 2
+#:       + disk 3 x 2 デバイス + network 3 x 2 インタフェース = 29
+#: ※CR-011 これに nfs の 6 を足す (全ホストが NFS クライアントである)。
+SAR_METRICS_PER_POINT = (4 + 3 + 1 + 3 + 4 + 2
+                         + 3 * len(G.SAR_DEVICES) + 3 * len(G.SAR_IFACES)
+                         + len(G.SAR_WANTED_NFS))
+
+#: ※CR-011 `nfsd` は **NFS サーバ役の 1 ホストだけ**に出る。
+#: したがってホスト数に比例しない。1 時刻あたり 1 ホスト分だけ加算する。
+SAR_NFSD_METRICS_PER_POINT = len(G.SAR_WANTED_NFSD)
+
+#: ※CR-010 sar が 1 時刻・1 ホストあたりに書くデータ行数。
+#: デバイスを持たない 6 活動が 1 行ずつ + disk 2 行 + network 2 行 = 10
+#: ※CR-011 nfs の 1 行を足して 11。
+SAR_LINES_PER_POINT = 7 + len(G.SAR_DEVICES) + len(G.SAR_IFACES)
+
+#: ※CR-011 `nfsd` の行。サーバ役の 1 ホストだけ、1 時刻につき 1 行。
+SAR_NFSD_LINES_PER_POINT = 1
 
 
 #: レポートの実物を残す先 (環境変数)。**指定があれば tearDown 前に複写する。**
@@ -305,7 +336,10 @@ class TestA006Performance(H.BaselineCase):
         """
         self.assertEqual(SCALE["days"], LARGE_USE_DAYS,
                          "大規模ケースは 90 日分である")
-        self.assertEqual(self.expected_records, 2851200,
+        # ※CR-010 sar を加えて 2,851,200 → 5,106,240 行になった。
+        # ※CR-011 NFS を加えて 5,780,160 行になった。
+        #   内訳: 5,106,240 + nfs 3 ホスト x 6 x 25,920 + nfsd 1 ホスト x 8 x 25,920
+        self.assertEqual(self.expected_records, 5780160,
                          "実施規模 {0:,} 行".format(self.expected_records))
 
     # 1
@@ -394,7 +428,9 @@ class TestA006Performance(H.BaselineCase):
         **S4 (取り込み) の所要時間はファイル数に比例するため、日数の前提が
         そのまま性能に効く**(`docs/ADR.md` ADR-013 の残存リスク)。
         """
-        self.assertEqual(self.file_count, SCALE["days"] * 4)
+        # ※CR-010 1 日あたり DBConnection 1 + jstat 2 + bqueues 1 + sar 3 = 7
+        self.assertEqual(self.file_count,
+                         SCALE["days"] * (4 + len(G.SAR_HOSTS)))
         self.assertLessEqual(self.file_count, 10000)
 
 
@@ -467,7 +503,9 @@ class TestA006NormalUseCase(H.BaselineCase):
 
     def test_04_scale_is_the_normal_use_case(self):
         self.assertEqual(NORMAL_SCALE["days"], NORMAL_USE_DAYS)
-        self.assertEqual(self.file_count, NORMAL_USE_DAYS * 4)
+        # ※CR-010 1 日あたり DBConnection 1 + jstat 2 + bqueues 1 + sar 3 = 7
+        self.assertEqual(self.file_count,
+                         NORMAL_USE_DAYS * (4 + len(G.SAR_HOSTS)))
 
     def test_05_all_eleven_algorithms_ran(self):
         """※CR-005 — **ALG-C1 を含む 11 個が本番規模で走ったこと。**

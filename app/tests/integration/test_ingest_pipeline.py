@@ -9,7 +9,7 @@ import unittest
 from s_anomaly import (
     bootstrap, discovery, loaders, progress as progress_mod, schema,
 )
-from s_anomaly.loaders import bqueues, dbconn, jstat
+from s_anomaly.loaders import bqueues, dbconn, jstat, sar
 from tests.integration import _setup_baseline
 
 FIXTURES = os.path.join(_setup_baseline.APP_DIR, "tests", "fixtures")
@@ -55,6 +55,7 @@ class TestIngestPipeline(unittest.TestCase):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         files = discovery.discover(self.root, self.progress)
         for logfile in files:

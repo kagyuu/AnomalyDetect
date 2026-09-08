@@ -14,7 +14,7 @@ from s_anomaly import (
     bootstrap, causes, co_anomaly, config, detectors, discovery, events,
     loaders, metrics, progress as progress_mod, schema,
 )
-from s_anomaly.loaders import bqueues, dbconn, jstat
+from s_anomaly.loaders import bqueues, dbconn, jstat, sar
 from tests.integration import _setup_baseline
 
 CORRELATION_RULES = {"CR-01", "CR-02", "CR-04", "CR-06"}
@@ -34,6 +34,7 @@ class TestEventsOrder(unittest.TestCase):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         for logfile in discovery.discover(
                 os.path.join(cls.paths["normal"], "logs"), cls.progress):

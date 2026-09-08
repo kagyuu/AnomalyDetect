@@ -160,3 +160,21 @@ python -m unittest discover -s app/tests/unit -t app -p "test_config.py" -v
 * 4 種以外の解析エラー理由コード。
 
 不足や矛盾を見つけた場合は、実装で埋めずに **`docs/P007-impl-direction.md` の 5章「未解決事項」へ追記して報告する。**
+
+
+---
+
+## ※CR-010 追記(2026-09-08) — U010 `sar` の実装コンテキスト
+
+**実装指示は `docs/P007-impl-direction/U010-sar.md` にある。着手前に必ず §3「静かに壊れる 3 箇所」を読む。**
+
+| 読む順 | 文書 | 何が分かるか |
+| --- | --- | --- |
+| 1 | `docs/P007-impl-direction/U010-sar.md` | **タスク一覧と、間違えやすい点** |
+| 2 | `docs/P003-backend-spec.md` 5.4a(DS-SAR-01〜08) | ローダの内部仕様 |
+| 3 | `docs/P003-backend-spec.md` 6.3a(DS-07-07a/b) | `metrics` への合流と**許可リストの罠** |
+| 4 | `docs/P003-backend-spec.md` 7.14(DS-08-C1-01a/03a) | ALG-C1 と sar の比率 |
+| 5 | `docs/ArchitectureHandbook.md` 5.2a | **接頭 `pct_` と接尾 `_pct` の違い** |
+
+**新規ファイルは `app/src/s_anomaly/loaders/sar.py` の 1 つだけである。** 残りはすべて既存ファイルへの追記であり、
+**既存の振る舞いを変えてはならない**(`sa-*.csv` が無ければ CR-009 までと同じ結果になること)。

@@ -78,7 +78,7 @@ class TestSettings(unittest.TestCase):
         """**両方を同じ値にすれば、UTC 以外でも変換しない**(2026-09-06 の指示)。"""
         cfg = load_cfg("[timezone]\nstorage = Asia/Tokyo\n"
                        "db_connection = Asia/Tokyo\njvm_gc = Asia/Tokyo\n"
-                       "lsf_queue = Asia/Tokyo\n")
+                       "lsf_queue = Asia/Tokyo\nsar = Asia/Tokyo\n")   # ※CR-010
         self.assertEqual(config.converted_kinds(cfg), [])
 
     def test_unknown_kind_falls_back_to_storage(self):

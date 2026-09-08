@@ -58,7 +58,7 @@ DB 接続数 / JVM GC / LSF キューの運用ログを DuckDB に取り込み�
 | [`docs/P006-test-plan.md`](./docs/P006-test-plan.md) | テスト計画書。単体 / 結合 / 受け入れの方針とテストデータの前提(TP-xx) |
 | [`docs/P007-impl-direction.md`](./docs/P007-impl-direction.md) | プログラム実装定義 兼 実装指示書の**目次**(OKF形式)。個別指示は [`docs/P007-impl-direction/`](./docs/P007-impl-direction/) |
 | [`docs/P008-test-direction.md`](./docs/P008-test-direction.md) | 結合テスト定義 兼 実行指示書の**目次**(OKF形式)。個別指示は [`docs/P008-test-direction/`](./docs/P008-test-direction/) |
-| [`docs/P009-acceptance-direction.md`](./docs/P009-acceptance-direction.md) | 受け入れ結合テスト定義 兼 実行指示書の**目次**(OKF形式)。個別指示 A001〜A011 は [`docs/P009-acceptance-direction/`](./docs/P009-acceptance-direction/) |
+| [`docs/P009-acceptance-direction.md`](./docs/P009-acceptance-direction.md) | 受け入れ結合テスト定義 兼 実行指示書の**目次**(OKF形式)。個別指示 A001〜A014 は [`docs/P009-acceptance-direction/`](./docs/P009-acceptance-direction/) |
 | [`docs/P010-design-review.md`](./docs/P010-design-review.md) / [`docs/P010-design-review-2.md`](./docs/P010-design-review-2.md) | 設計横断レビュー(1 回目 / 2 回目) |
 | [`docs/P011-impact-analysis.md`](./docs/P011-impact-analysis.md) | 設計修正の影響分析 |
 
@@ -88,6 +88,8 @@ DB 接続数 / JVM GC / LSF キューの運用ログを DuckDB に取り込み�
 | [`docs/P204-impact-analysis.md`](./docs/P204-impact-analysis.md) | 修正の影響分析(1 回目 / 2 回目)。最新の判定が冒頭、過去の判定と実行履歴が後段 |
 | [`docs/P010-design-review-3.md`](./docs/P010-design-review-3.md) | 設計横断レビュー(3 回目。CR-001〜004 対応) |
 | [`docs/P010-design-review-4.md`](./docs/P010-design-review-4.md) | 設計横断レビュー(4 回目。**CR-005〜007 対応**) |
+| [`docs/P010-design-review-5.md`](./docs/P010-design-review-5.md) / [`docs/P011-impact-analysis-5.md`](./docs/P011-impact-analysis-5.md) | 設計横断レビュー(5 回目。**CR-010 対応**)と、その影響分析 |
+| [`docs/P010-design-review-6.md`](./docs/P010-design-review-6.md) | 設計横断レビュー(6 回目。**CR-011 対応**。不整合 0 件) |
 
 ---
 
@@ -116,9 +118,9 @@ DB 接続数 / JVM GC / LSF キューの運用ログを DuckDB に取り込み�
 
 ---
 
-## 現在の状態(2026-09-06 時点。**バージョン 0.5.0**)
+## 現在の状態(2026-09-08 時点。**バージョン 0.7.0**)
 
-* **CR-001〜CR-007 を適用した。**
+* **CR-001〜CR-011 を適用した。**
 
   | 回 | CR | 内容 |
   | --- | --- | --- |
@@ -127,8 +129,10 @@ DB 接続数 / JVM GC / LSF キューの運用ログを DuckDB に取り込み�
   | 第 2 回 | **CR-006 / CR-007** | **検知(S6)の高速化と並列化** |
   | 第 3 回 | **CR-008** | **タイムゾーン**(入力種別ごとの設定・投入時の変換・レポートへの併記) |
   | 第 4 回 | **CR-009** | **SVG チャート**(アノマリーの状況の折れ線・同時アノマリーの重ね合わせ) |
+  | 第 5 回 | **CR-010** | **sar(sysstat)を分析対象に追加**(入力種別が 3 → 4。OS 資源統計) |
+  | 第 6 回 | **CR-011** | **sar の NFS / NFSD を追加**(活動種別が 8 → 10。**LSF グリッドが NFS を共有するため**) |
 
-* **テストは全件合格している。** 単体 495 件・結合 115 件・受け入れ 159 件(A006 の 19 件を含む)が、いずれも連続 2 回とも成功。
+* **テストは全件合格している。** 単体 543 件・結合 136 件・受け入れ 180 件(A006 の 19 件を含む)が、いずれも連続 2 回とも成功。
 
 * **アルゴリズムが 11 個になった。**
 
@@ -148,7 +152,7 @@ DB 接続数 / JVM GC / LSF キューの運用ログを DuckDB に取り込み�
   | `report_{HOST}_{yyyymm}.md` | ホスト × 年月ごとのイベント本文(先頭に集計章) |
   | `report_summary_{yyyymm}.md` | 全ホスト横断の集計サマリ |
 
-  **実物は [`docs/report-samples/`](./docs/report-samples/) にある**(30 日分 18 ファイル / 90 日分 54 ファイル)。
+  **実物は [`docs/report-samples/`](./docs/report-samples/) にある**(30 日分 18 ファイル / 90 日分 54 ファイル。**※CR-010 適用後のもの**)。
 
 * **4K トークンのローカル LLM で扱える**(90 日規模の実測)。
 
@@ -159,10 +163,15 @@ DB 接続数 / JVM GC / LSF キューの運用ログを DuckDB に取り込み�
 
 * **性能**(既定の `max_memory = 4GB`)
 
-  | 規模 | 0.1.0 | 0.2.0 | **0.4.0** | うち S6 |
-  | --- | --- | --- | --- | --- |
-  | 通常 30 日(950,400 行) | 147.4s | 69.9s | **53.1s** | 23.0s |
-  | 大規模 90 日(2,851,200 行) | 531.3s | 230.9s | **162.8s** | 72.1s |
+  | 規模 | 0.2.0 | 0.4.0 | 0.5.0 | 0.6.0 | **0.7.0** | うち S6 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 通常 30 日 | 69.9s | 53.1s | 95.3s | 132.1s | **141.6s**(1,926,720 行) | 36.5s |
+  | 大規模 90 日 | 230.9s | 162.8s | 302.4s | 359.3s | **367.3s**(5,780,160 行) | 106.1s |
+
+  **0.5.0 の増加は CR-009 のチャート生成、0.6.0 は CR-010 の sar 追加、
+  0.7.0 は CR-011 の NFS 追加による。**
+  **NFR-002(600 秒)には収まっている**(90 日で 367 秒 / **余裕 39%**)。
+  **NFS はホスト単位の系列であり、行が 13% 増えても所要は 2% しか増えていない。**
 
   **CR-008(タイムゾーン)による性能への影響は無い。** 既定はすべて UTC であり、
   変換の SQL が一度も発行されないためである(ADR-019)。

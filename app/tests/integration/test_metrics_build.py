@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from s_anomaly import (
     bootstrap, discovery, loaders, metrics, progress as progress_mod, schema,
 )
-from s_anomaly.loaders import bqueues, dbconn, jstat
+from s_anomaly.loaders import bqueues, dbconn, jstat, sar
 from tests.integration import _setup_baseline
 
 EXPECTED_METRICS = sorted(metrics.DETECTABLE_METRICS + metrics.RATIO_METRICS)
@@ -41,6 +41,7 @@ class TestMetricsBuild(unittest.TestCase):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         for logfile in discovery.discover(logs_dir, self.progress):
             loader[logfile.kind](self.con, logfile, self.progress)
@@ -70,10 +71,12 @@ class TestMetricsBuild(unittest.TestCase):
     def test_01_metric_kinds(self):
         got = sorted(r[0] for r in self.q("SELECT DISTINCT metric FROM metrics"))
         self.assertEqual(got, EXPECTED_METRICS)
-        self.assertEqual(len(got), 14)
+        # ※CR-010 で 14 + 22 = 36、※CR-011 で NFS の 14 件を足して 50
+        self.assertEqual(len(got), 50)
 
     def test_02_detectable_metrics(self):
-        self.assertEqual(len(metrics.DETECTABLE_METRICS), 11)
+        # ※CR-010 で 11 + 22 = 33、※CR-011 で NFS の 14 件を足して 47
+        self.assertEqual(len(metrics.DETECTABLE_METRICS), 47)
         for name in metrics.RATIO_METRICS:
             self.assertNotIn(name, metrics.DETECTABLE_METRICS)
 

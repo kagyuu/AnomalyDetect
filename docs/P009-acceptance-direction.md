@@ -36,6 +36,7 @@
 - [x] A011 [一般ユーザー権限での実行](./P009-acceptance-direction/A011-user-privilege.md) — 管理者権限を要求しないこと — **結果: PASS** — **★CR-001〜004により改訂。反映済み**
 - [x] A012 [タイムゾーンの疎通確認](./P009-acceptance-direction/A012-timezone.md) — 入力JST/レポートUTC、入力UTC/レポートJST、sar が無い場合 — **結果: PASS** — **※CR-008で新設**
 - [x] A013 [チャート出力の確認](./P009-acceptance-direction/A013-charts.md) — リンクとファイルの対応・重ね合わせが出ること・再現性・サマリ不変 — **結果: PASS** — **※CR-009で新設**
+- [x] A014 [sar(sysstat)取り込みの確認](./P009-acceptance-direction/A014-sar.md) — sar 由来のイベントが実際に出ること・pct_idle を検知しないこと・後方互換 — **※CR-010で新設**
 
 ## 4. 全テスト共通の指示
 

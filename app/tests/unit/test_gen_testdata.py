@@ -12,7 +12,7 @@ import unittest
 from datetime import datetime
 
 from s_anomaly import bootstrap, discovery, progress as progress_mod, schema
-from s_anomaly.loaders import bqueues, dbconn, jstat
+from s_anomaly.loaders import bqueues, dbconn, jstat, sar
 
 # app/tests/unit/ -> app/
 APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,10 +22,12 @@ sys.path.insert(0, os.path.join(APP_DIR, "tools"))
 import gen_testdata  # noqa: E402
 
 SERIES_ID_RE = re.compile(
-    r"^(db_connection/[^/:]+:\d+/.+|jvm_gc/[^@]+@.+|lsf_queue/[^/]+/.+)$"
+    r"^(db_connection/[^/:]+:\d+/.+|jvm_gc/[^@]+@.+|lsf_queue/[^/]+/.+"
+    r"|sar/[^/]+/[^/]+/.+)$"      # ※CR-010 sar/{host}/{activity}/{device}
 )
+# ※CR-005 で ALG-C1 が加わっている (この定数が追随していなかった)。
 ALGORITHM_IDS = ["ALG-A{0}".format(i) for i in range(1, 6)] + \
-                ["ALG-B{0}".format(i) for i in range(1, 6)]
+                ["ALG-B{0}".format(i) for i in range(1, 6)] + ["ALG-C1"]
 SEVERITIES = ("INFO", "WARN", "FATAL", "SEVERE")
 
 
@@ -65,6 +67,7 @@ class DbHelper(object):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         results = {}
         for logfile in discovery.discover(logs_dir, self.progress):
@@ -91,17 +94,22 @@ class TestNormalGeneration(unittest.TestCase):
 
     def test_file_count(self):
         names = sorted(os.listdir(self.logs))
-        # ① 14 + ② 28 (2 組 x 14 日) + ③ 14 = 56
-        self.assertEqual(len(names), 56, names[:5])
+        # ① 14 + ② 28 (2 組 x 14 日) + ③ 14 + ④ 42 (3 ホスト x 14 日) = 98
+        self.assertEqual(len(names), 98, names[:5])
         self.assertEqual(len([n for n in names if n.startswith("DBConnection_")]), 14)
         self.assertEqual(len([n for n in names if "_gc_" in n]), 28)
         self.assertEqual(len([n for n in names if n.startswith("bqueues_")]), 14)
+        # ※CR-010 sar。**既存 3 種別と同じホスト名で出す** (P001 FR-150)
+        sar_names = [n for n in names if n.startswith("sa-")]
+        self.assertEqual(len(sar_names), 42)
+        hosts = {n.split("-")[1] for n in sar_names}
+        self.assertEqual(hosts, {"host01", "host02", "lsfhost01"})
 
     def test_loadable_without_errors(self):
         helper = DbHelper()
         self.addCleanup(helper.close)
         results = helper.load_all(self.logs)
-        self.assertEqual(len(results), 56)
+        self.assertEqual(len(results), 98)   # ※CR-010 sar 42 件を含む
         for name, result in results.items():
             self.assertEqual(result.errors, {}, name)
             self.assertGreater(result.ok_rows, 0, name)
@@ -167,7 +175,42 @@ class TestExpectedJson(unittest.TestCase):
             self.assertIn(key, self.expected)
 
     def test_injected_count(self):
-        self.assertEqual(len(self.expected["injected"]), 7)
+        # ※CR-010 で 3 件、※CR-011 で 2 件 (INJ-013 / INJ-014) を追加した
+        self.assertEqual(len(self.expected["injected"]), 12)
+
+    def test_sar_injections_present(self):
+        """※CR-010 sar の異常が正解ファイルに入っていること。
+
+        **INJ-010 は INJ-001 と同一ホスト・同時刻である。** 「同時に発生した
+        アノマリー」でアプリ層と OS 資源が結び付くことを確かめるためであり、
+        ずらすとその確認ができなくなる (P001 FR-150)。
+        """
+        by_id = {i["id"]: i for i in self.expected["injected"]}
+        self.assertIn("INJ-010", by_id)
+        self.assertIn("INJ-011", by_id)
+        self.assertTrue(by_id["INJ-010"]["series_id"].startswith("sar/host01/"))
+        self.assertEqual(by_id["INJ-011"]["metric"], "pct_memused")
+        self.assertEqual(by_id["INJ-010"]["from"], by_id["INJ-001"]["from"])
+        # INJ-012 は 8 活動すべてがイベントとして現れる状態を作る (A014 #5)
+        self.assertIn("INJ-012", by_id)
+        self.assertEqual(by_id["INJ-012"]["metric"], "pswpout_s")
+
+    def test_nfs_injections_present(self):
+        """※CR-011 NFS の異常が正解ファイルに入っていること。
+
+        **INJ-013 は LSF のジョブ滞留 (INJ-006) と同じホストである。**
+        依頼者が指摘した「NFS の詰まり → ジョブ滞留」という因果を
+        レポート上で突き合わせるためであり、**別ホストにすると意味を失う。**
+        """
+        by_id = {i["id"]: i for i in self.expected["injected"]}
+        self.assertIn("INJ-013", by_id)
+        self.assertIn("INJ-014", by_id)
+        self.assertEqual(by_id["INJ-013"]["metric"], "retrans_s")
+        self.assertEqual(by_id["INJ-014"]["metric"], "miss_s")
+        # INJ-006 は lsf_queue/lsfhost01/long。ホスト名が一致すること
+        lsf_host = by_id["INJ-006"]["series_id"].split("/")[1]
+        self.assertEqual(by_id["INJ-013"]["series_id"],
+                         "sar/{0}/nfs/-".format(lsf_host))
 
     def test_clean_series_present(self):
         self.assertGreaterEqual(len(self.expected["clean_series"]), 1)

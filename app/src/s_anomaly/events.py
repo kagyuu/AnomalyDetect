@@ -126,10 +126,12 @@ def _pick_shape(shapes):
     return shapes[0] if shapes else SHAPE_SPIKE_UP
 
 
-#: series_id からホスト名を取り出すための書式 (P002 6.3 の 3 書式)。
+#: series_id からホスト名を取り出すための書式 (P002 6.3 の 4 書式)。※CR-010
 _DBCONN_RE = re.compile(r"^db_connection/([^/:]+):\d+/.+$")
 _JVMGC_RE = re.compile(r"^jvm_gc/[^@]+@(.+)$")
 _LSF_RE = re.compile(r"^lsf_queue/([^/]+)/.+$")
+#: ※CR-010 sar。`lsf_queue` と同じく第 1 区切りの直後がホスト名である。
+_SAR_RE = re.compile(r"^sar/([^/]+)/.+$")
 
 #: どの書式にも一致しなかったときのホスト名 (DS-09-08)。
 UNKNOWN_HOST = "unknown"
@@ -141,7 +143,7 @@ def extract_host(series_id) -> str:
     イベント ID の採番 (DS-09-07) とレポートの分割先 (DS-12-05) の両方が使う。
     **どの書式にも一致しない場合も実行を止めず** UNKNOWN_HOST を返す (FR-072)。
     """
-    for pattern in (_DBCONN_RE, _JVMGC_RE, _LSF_RE):
+    for pattern in (_DBCONN_RE, _JVMGC_RE, _LSF_RE, _SAR_RE):   # ※CR-010
         m = pattern.match(series_id or "")
         if m:
             return m.group(1)

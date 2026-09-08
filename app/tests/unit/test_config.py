@@ -38,6 +38,8 @@ EXPECTED_KEYS = set(
     # ※CR-009 チャート。
     + [("chart", k) for k in ("enabled", "min_severity", "max_per_host",
                               "max_overlay_per_host", "pad_ratio")]
+    # ※CR-010 sar。取り込む活動種別。
+    + [("sar", "activities")]
 )
 
 

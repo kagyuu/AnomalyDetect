@@ -21,9 +21,23 @@ from .base import (
 )
 
 #: 上限の概念が無いメトリクス (FR-058)。累積回数・時間や、上限が自明でないもの。
+#:
+#: ※CR-010 sar の 14 件を追加した。**とくに `pct_idle` の除外は必須である。**
+#: 除外し忘れると、**閑散なホストが全件「上限に張り付き」として検知される**
+#: (100% の遊休は正常であって異常ではない。P001 FR-148)。
+#: `kbmemfree` は「小さいほど逼迫している」向きであり、観点3 が捉える
+#: 「高い値で止まっている」状態とは向きが逆である。空きメモリの逼迫は
+#: `pct_memused` の側で捉える。
 NO_CEILING = {
     "jvm_gc": ("fgc_delta", "fgct_delta", "ygct_delta"),
     "lsf_queue": ("njobs", "run"),
+    "sar": ("pct_idle", "kbmemfree", "tps", "bread_s", "bwrtn_s",
+            "pswpin_s", "pswpout_s", "runq_sz", "ldavg_1", "ldavg_5",
+            "blocked", "await", "rxkb_s", "txkb_s",
+            # ※CR-011 NFS。**すべて毎秒のレート値であり上限が自明でない。**
+            "call_s", "retrans_s", "read_s", "write_s", "access_s", "getatt_s",
+            "scall_s", "badcall_s", "hit_s", "miss_s",
+            "sread_s", "swrite_s", "saccess_s", "sgetatt_s"),
 }
 
 #: 値の解像度の下限 (FR-057 の条件 3)。これ未満の distinct 値しか持たない系列は、
@@ -33,6 +47,19 @@ MIN_DISTINCT_VALUES = 10
 #: 実際の容量が取れる場合に使う列 (推定より優先する。FR-056)。
 #  `-gc` 形式のときだけ容量列があり、`*_pct` が導出されている。
 RATIO_OF = {"ou": "ou_pct", "eu": "eu_pct", "mu": "mu_pct"}
+
+#: ※CR-010 **それ自身が 0〜100 の比率であるメトリクス** (DS-08-C1-01a)。
+#:
+#: `ou` → `ou_pct` のような**別メトリクスへの読み替えを伴わない**点が
+#: `RATIO_OF` と異なる。`RATIO_OF` に自己写像を入れると、「読み替え先の点数が
+#: 足りるか」を確認する分岐を無意味に通るため、別の集合として持つ。
+#:
+#: **上限は 100 であり、ADR-016 の推定上限 (実測最大値) を使わない。**
+#: **`pct_idle` は含めない** — 100% は遊休であり正常である (上の NO_CEILING)。
+SELF_RATIO_METRICS = frozenset([
+    "pct_user", "pct_system", "pct_iowait", "pct_memused",
+    "pct_commit", "pct_swpused", "pct_util", "pct_ifutil",
+])
 
 
 class C1Saturation(Detector):
@@ -54,7 +81,11 @@ class C1Saturation(Detector):
         pct_metric = RATIO_OF.get(series.metric)
         target_metric = series.metric
         ceiling = None
-        if pct_metric is not None:
+        # ※CR-010 sar が直接出す比率は、それ自身が 0〜100 である。
+        # **読み替えをせず、上限 100 をそのまま使う** (DS-08-C1-01a)。
+        if series.metric in SELF_RATIO_METRICS:
+            ceiling = 100.0
+        elif pct_metric is not None:
             row = con.execute(
                 "SELECT count(*) FROM metrics WHERE series_id = ? AND metric = ?",
                 [series.series_id, pct_metric],

@@ -77,8 +77,19 @@ DEFAULT_TIMEZONE = "UTC"
 
 #: ※CR-008 タイムゾーンを個別に設定できる入力の種別。
 #: `discovery` の KIND_* および格納先テーブル名と一致させる。
-#: **sar を追加するときはここに 1 行足す。**
-SOURCE_KINDS = ["db_connection", "jvm_gc", "lsf_queue"]
+#: ※CR-010 で `sar` を追加した。**ここに無いと `[timezone] sar` が
+#: 「未知のキー」として警告だけ出して無視され、時差のある環境で
+#: 突き合わせが静かに全て外れる。**
+SOURCE_KINDS = ["db_connection", "jvm_gc", "lsf_queue", "sar"]
+
+#: ※CR-010 取り込む sar の活動種別。**既定は 8 種類すべて** (P001 FR-142)。
+#: 名前は `loaders.sar.ACTIVITY_RULES` と一致させる。
+#: ※CR-011 で `nfs` / `nfsd` を追加した (8 → 10)。
+#: **ここに無いと、ローダが見出しを判別できても既定の絞り込みから外れ、
+#: 警告も出ないまま読み飛ばされる。**
+SAR_ACTIVITIES = ["cpu", "memory", "swap_space", "io",
+                  "load", "swapping", "disk", "network",
+                  "nfs", "nfsd"]
 
 
 #: P002 2.2 の表の全行。件数を数え上げてハードコードしない。
@@ -156,6 +167,13 @@ PARAMS = (
               note="IANA のタイムゾーン名 (例 UTC, Asia/Tokyo)")
         for kind in SOURCE_KINDS
     ]
+    # ※CR-010 取り込む sar の活動種別。カンマ区切り。
+    # **未知の語は警告して無視する** (P001 FR-149。終了コード 3 にしない)。
+    # 空文字は「sar を取り込まない」を意味し、これもエラーではない。
+    + [
+        Param("sar", "activities", str, ",".join(SAR_ACTIVITIES),
+              note="cpu,memory,swap_space,io,load,swapping,disk,network から選ぶ"),
+    ]
 )
 
 PARAMS_BY_SECTION = {}
@@ -169,6 +187,26 @@ CORRELATION_RULES = [
     ("ALG-B1.long_minutes", ">", "ALG-B1.short_minutes", "long_minutes は short_minutes より大きい必要があります"),
     ("ALG-B2.p_fatal", "<", "ALG-B2.p_warn", "p_fatal は p_warn より小さい必要があります"),
 ]
+
+
+def _parse_activities(raw):
+    """`[sar] activities` を (既知の活動のリスト, 未知の語のリスト) に分ける。
+
+    ※CR-010。**大文字小文字を区別しない。** 空要素は捨てる。
+    既知の語は `SAR_ACTIVITIES` の並び順に正規化して返す (NFR-009 の再現性)。
+    """
+    known, unknown = [], []
+    for token in str(raw or "").split(","):
+        name = token.strip().lower()
+        if not name:
+            continue
+        if name in SAR_ACTIVITIES:
+            if name not in known:
+                known.append(name)
+        else:
+            unknown.append(token.strip())
+    known.sort(key=SAR_ACTIVITIES.index)
+    return known, unknown
 
 
 class Config(object):
@@ -241,6 +279,17 @@ class Config(object):
     @property
     def chart_pad_ratio(self) -> float:
         return self._values[("chart", "pad_ratio")]
+
+    # --- sar (※CR-010) --------------------------------------------------
+    @property
+    def sar_activities(self) -> frozenset:
+        """取り込む sar の活動種別 (正規化済み)。
+
+        **未知の語は捨てる。** 警告は `load` が出す (P001 FR-149)。
+        空集合は「sar を取り込まない」を意味し、エラーではない。
+        """
+        raw = self._values.get(("sar", "activities"), "")
+        return frozenset(_parse_activities(raw)[0])
 
     def timezone_names(self) -> Dict[str, str]:
         """検証のために、設定されている全タイムゾーン名を {表示名: 値} で返す。"""
@@ -366,6 +415,22 @@ def load(path: Optional[str], progress) -> Config:
                          "容量表記 (例: 4GB, 512MB) を指定してください")
                     )
                     continue
+            if section == "sar" and key == "activities":
+                # ※CR-010 未知の活動名は警告して無視する (P001 FR-149)。
+                # **終了コード 3 にしない。** 設定の書き間違いで解析が止まる
+                # ほうが害が大きく、取り込まれていないことは系列数から分かる。
+                known, unknown = _parse_activities(value)
+                for name in unknown:
+                    progress.warning(
+                        STEP,
+                        "[sar] activities の '{0}' は活動種別として解釈されませんでした。"
+                        "有効な名前は {1} です".format(name, ", ".join(SAR_ACTIVITIES)),
+                    )
+                if not known:
+                    progress.warning(
+                        STEP, "[sar] activities が空です。sar を取り込みません"
+                    )
+                value = ",".join(known)
             values[(section, key)] = value
             if value != param.default:
                 changed.append("[{0}] {1} = {2}".format(section, key, value))

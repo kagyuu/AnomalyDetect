@@ -34,6 +34,44 @@ METRIC_LABELS = {
     "pend": "待機ジョブ数",
     "run": "実行中ジョブ数",
     "susp": "サスペンド中ジョブ数",
+    # --- ※CR-010 sar (P002 UI-04-01a) ---
+    "pct_user": "CPU ユーザ使用率",
+    "pct_system": "CPU システム使用率",
+    "pct_iowait": "CPU I/O 待ち率",
+    "pct_idle": "CPU 遊休率",
+    "pct_memused": "メモリ使用率",
+    "pct_commit": "メモリコミット率",
+    "kbmemfree": "空きメモリ (KB)",
+    "pct_swpused": "スワップ使用率",
+    "pswpin_s": "スワップイン(ページ/秒)",
+    "pswpout_s": "スワップアウト(ページ/秒)",
+    "tps": "I/O 転送回数(回/秒)",
+    "bread_s": "読み込みブロック数(/秒)",
+    "bwrtn_s": "書き込みブロック数(/秒)",
+    "runq_sz": "実行待ちプロセス数",
+    "ldavg_1": "ロードアベレージ (1 分)",
+    "ldavg_5": "ロードアベレージ (5 分)",
+    "blocked": "I/O 待ちブロック数",
+    "pct_util": "デバイス使用率",
+    "await": "I/O 平均応答時間 (ms)",
+    "pct_ifutil": "インタフェース使用率",
+    "rxkb_s": "受信 (KB/秒)",
+    "txkb_s": "送信 (KB/秒)",
+    # --- ※CR-011 sar の NFS / NFSD (P002 UI-04-01a) ---
+    "call_s": "NFS 要求 (回/秒)",
+    "retrans_s": "NFS 再送 (回/秒)",
+    "read_s": "NFS 読み込み要求 (回/秒)",
+    "write_s": "NFS 書き込み要求 (回/秒)",
+    "access_s": "NFS アクセス権確認 (回/秒)",
+    "getatt_s": "NFS 属性取得 (回/秒)",
+    "scall_s": "NFS サーバ受信要求 (回/秒)",
+    "badcall_s": "NFS サーバ不正要求 (回/秒)",
+    "hit_s": "NFS 応答キャッシュ命中 (回/秒)",
+    "miss_s": "NFS 応答キャッシュ失敗 (回/秒)",
+    "sread_s": "NFS サーバ読み込み (回/秒)",
+    "swrite_s": "NFS サーバ書き込み (回/秒)",
+    "saccess_s": "NFS サーバアクセス権確認 (回/秒)",
+    "sgetatt_s": "NFS サーバ属性取得 (回/秒)",
 }
 
 ALGORITHM_ASPECTS = {"観点1": "瞬間的な外れ値", "観点2": "持続的な増加",
@@ -171,6 +209,15 @@ def _series_key_text(event) -> str:
         parts = sid.split("/")
         if len(parts) >= 3:
             return "host={0}, queue={1}".format(parts[1], parts[2])
+    if event.source == "sar":                       # ※CR-010
+        # sar/{host}/{activity}/{device}。デバイスを持たない活動は "-" が入る。
+        # **その場合 device= は書かない**(意味の無い "-" を読ませない)。
+        parts = sid.split("/")
+        if len(parts) >= 4:
+            text = "host={0}, activity={1}".format(parts[1], parts[2])
+            if parts[3] != "-":
+                text += ", device={0}".format(parts[3])
+            return text
     return sid
 
 

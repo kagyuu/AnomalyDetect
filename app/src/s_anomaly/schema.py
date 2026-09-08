@@ -41,6 +41,17 @@ DDL = {
             _load_seq BIGINT
         )
     """,
+    "sar": """
+        CREATE TABLE IF NOT EXISTS sar (
+            ts TIMESTAMP,
+            host VARCHAR,
+            activity VARCHAR,
+            device VARCHAR,
+            metric VARCHAR,
+            value DOUBLE,
+            _load_seq BIGINT
+        )
+    """,
     "load_error": """
         CREATE TABLE IF NOT EXISTS load_error (
             file_path VARCHAR,
@@ -55,6 +66,9 @@ LOGICAL_KEYS = {
     "db_connection": ["ts", "host", "port", "datasource"],
     "jvm_gc": ["ts", "container", "host"],
     "lsf_queue": ["ts", "host", "queue"],
+    # ※CR-010 sar は縦持ちのため、metric まで含めないと 1 行を特定できない
+    # (DS-LD-06a)。**5 列である。**
+    "sar": ["ts", "host", "activity", "device", "metric"],
 }
 
 #: 列 -> DuckDB の型。一括挿入 (read_csv 経由) で列型を明示するために使う。
@@ -78,6 +92,12 @@ COLUMN_TYPES = {
         "njobs": "BIGINT", "pend": "BIGINT", "run": "BIGINT", "susp": "BIGINT",
         "_load_seq": "BIGINT",
     },
+    # ※CR-010
+    "sar": {
+        "ts": "TIMESTAMP", "host": "VARCHAR", "activity": "VARCHAR",
+        "device": "VARCHAR", "metric": "VARCHAR", "value": "DOUBLE",
+        "_load_seq": "BIGINT",
+    },
 }
 
 #: 各テーブルへ INSERT する列 (`_load_seq` を含む)。
@@ -94,10 +114,14 @@ COLUMNS = {
     "lsf_queue": [
         "ts", "host", "queue", "njobs", "pend", "run", "susp", "_load_seq",
     ],
+    # ※CR-010
+    "sar": [
+        "ts", "host", "activity", "device", "metric", "value", "_load_seq",
+    ],
 }
 
 
 def create_all(con):
-    """4 テーブルを作成する。冪等 (2 回呼んでも失敗しない)。"""
+    """5 テーブルを作成する (※CR-010 で sar を追加)。冪等 (2 回呼んでも失敗しない)。"""
     for ddl in DDL.values():
         con.execute(ddl)

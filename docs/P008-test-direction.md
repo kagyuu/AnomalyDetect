@@ -14,7 +14,7 @@
 
 ## 2. 本フェーズの対象範囲
 
-`docs/P006-test-plan.md` 5.2 の T-01〜T-08 に対応する。**いずれも同一スプリント内で完結する、モジュール間の連携テスト**である。
+`docs/P006-test-plan.md` 5.2 の T-01〜T-09 に対応する。 ※CR-010 で T-09 を追加**いずれも同一スプリント内で完結する、モジュール間の連携テスト**である。
 
 * **対象**: 同一スプリント内の複数モジュール間の連携、`metrics` を介したデータの受け渡し、検知器からレポート文字列生成までの連結。
 * **対象外**: 単体テスト(`docs/P007-impl-direction.md` で指示済み)、プロセスを起動する確認・両 OS 確認・性能・再現性・再起動耐性(いずれも `docs/P009-acceptance-direction.md` の対象)。
@@ -29,6 +29,7 @@
 - [x] T006 [レポート生成と正解の突き合わせ](./P008-test-direction/T006-report-expected.md) — 全モジュール連結 → expected.json との照合(U008) — **★CR-001・CR-004によりレポート群が対象になった。反映済み**
 - [x] T007 [一時ファイルの後始末](./P008-test-direction/T007-tmpfile-cleanup.md) — report.md.tmp が残らないこと(U008) — **★CR-001により一時ファイルがファイル数分できる。反映済み**
 - [x] T008 [進捗ログの出力先振り分け](./P008-test-direction/T008-progress-routing.md) — 標準出力と標準エラーの分離と書式(U008)
+- [x] T009 [sar 取り込みパイプラインの連携](./P008-test-direction/T009-sar-pipeline.md) — sa-*.csv → sar → metrics → **sar 由来のイベントが出ること**(U010。※CR-010)
 
 ## 4. 全テスト共通の指示
 

@@ -16,7 +16,7 @@ from s_anomaly import (
     bootstrap, cli, config, detectors, discovery, loaders, metrics,
     progress as progress_mod, schema,
 )
-from s_anomaly.loaders import bqueues, dbconn, jstat
+from s_anomaly.loaders import bqueues, dbconn, jstat, sar
 from tests.integration import _setup_baseline
 
 OVERLAP_TOLERANCE = timedelta(minutes=60)
@@ -36,6 +36,7 @@ class TestDetectorsRun(unittest.TestCase):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         logs = os.path.join(cls.paths["normal"], "logs")
         for logfile in discovery.discover(logs, cls.progress):
@@ -169,6 +170,7 @@ class TestParallelDetect(unittest.TestCase):
             discovery.KIND_DBCONN: dbconn.load,
             discovery.KIND_JVMGC: jstat.load,
             discovery.KIND_LSF: bqueues.load,
+            discovery.KIND_SAR: sar.load,      # ※CR-010
         }
         logs = os.path.join(cls.paths["normal"], "logs")
         for logfile in discovery.discover(logs, cls.progress):
